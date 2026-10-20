@@ -5,16 +5,19 @@ import javax.inject.Inject;
 import net.runelite.api.Client;
 import net.runelite.api.ItemComposition;
 import net.runelite.api.MenuEntry;
+import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.MenuEntryAdded;
+import net.runelite.api.events.MenuOpened;
+import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.config.Keybind;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.input.KeyManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.util.HotkeyListener;
-import net.runelite.client.config.Keybind;
 
 @PluginDescriptor(
 	name = "Placeholder Click Blocker",
@@ -33,6 +36,11 @@ public class PlaceholderClickBlockerPlugin extends Plugin
 	private KeyManager keyManager;
 
 	private boolean shiftHeld;
+
+	/**
+	 * True while the right-click menu is open, so clicks chosen from the menu are let through.
+	 */
+	private boolean menuOpened;
 
 	private final HotkeyListener shiftListener = new HotkeyListener(() -> Keybind.SHIFT)
 	{
@@ -60,42 +68,70 @@ public class PlaceholderClickBlockerPlugin extends Plugin
 	{
 		keyManager.unregisterKeyListener(shiftListener);
 		shiftHeld = false;
+		menuOpened = false;
+	}
+
+	@Subscribe
+	public void onMenuOpened(MenuOpened event)
+	{
+		menuOpened = true;
+	}
+
+	@Subscribe
+	public void onClientTick(ClientTick event)
+	{
+		if (!client.isMenuOpen())
+		{
+			menuOpened = false;
+		}
 	}
 
 	@Subscribe
 	public void onMenuEntryAdded(MenuEntryAdded event)
 	{
+		if (!config.hideOptions() || allowedByShift())
+		{
+			return;
+		}
+
 		final MenuEntry entry = event.getMenuEntry();
-
-		if (entry.getParam1() != InterfaceID.Bankmain.ITEMS)
-		{
-			return;
-		}
-
-		if (shiftHeld && config.disableWithShift())
-		{
-			return;
-		}
-
-		if (!isPlaceholder(entry.getWidget()))
-		{
-			return;
-		}
-
-		if (config.hideOptions())
+		if (isPlaceholderEntry(entry))
 		{
 			client.getMenu().removeMenuEntry(entry);
 		}
-		else
+	}
+
+	@Subscribe
+	public void onMenuOptionClicked(MenuOptionClicked event)
+	{
+		final boolean fromMenu = menuOpened;
+		menuOpened = false;
+
+		if (fromMenu || allowedByShift())
 		{
-			// Deprioritized entries are sorted below "Cancel", so a left-click does nothing
-			// while the options stay available in the right-click menu.
-			entry.setDeprioritized(true);
+			return;
+		}
+
+		if (isPlaceholderEntry(event.getMenuEntry()))
+		{
+			// Left-click on a placeholder: do nothing
+			event.consume();
 		}
 	}
 
-	private boolean isPlaceholder(Widget widget)
+	private boolean allowedByShift()
 	{
+		return shiftHeld && config.disableWithShift();
+	}
+
+	private boolean isPlaceholderEntry(MenuEntry entry)
+	{
+		if (entry == null || entry.getParam1() != InterfaceID.Bankmain.ITEMS)
+		{
+			return false;
+		}
+
+		final Widget widget = entry.getWidget();
 		if (widget == null || widget.getItemId() <= 0)
 		{
 			return false;
